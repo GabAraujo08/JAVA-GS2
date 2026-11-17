@@ -133,34 +133,251 @@ Pelo Gateway: `http://localhost:8082/<nome-do-servico>/api/v1/...`
 | PUT    | `/api/v1/checkins/{id}`   | Atualiza observação/resolvido | 200 / 400 / 404 |
 | DELETE | `/api/v1/checkins/{id}`   | Exclui                        | 204 / 404 |
 
-## Roteiro de teste rápido
+## Roteiro de teste (Insomnia)
 
-Troque `8082` pela porta do Gateway se necessário (padrão 8082).
+Todas as requisições passam pelo **Gateway** (porta fixa 8082), então não é preciso saber a porta dos serviços. No Insomnia, crie uma requisição, escolha o método, cole a URL e, quando houver Body, selecione **JSON** e cole o conteúdo. Execute na ordem.
 
-```bash
-# 1) Idoso 1 começa AGUARDANDO
-curl http://localhost:8082/idoso-service/api/v1/idosos/1
+## Idosos (idoso-service)
 
-# 2) Check-in "Estou bem" -> checkin-service chama o idoso-service via Feign
-curl -i -X POST http://localhost:8082/checkin-service/api/v1/checkins \
-  -H "Content-Type: application/json" \
-  -d '{"idosoId":1,"tipo":"ESTOU_BEM","observacao":"Tudo certo"}'
+### 1. Listar idosos
 
-# 3) Status do idoso 1 agora é BEM
-curl http://localhost:8082/idoso-service/api/v1/idosos/1
+**GET**
 
-# 4) Pedido de ajuda -> status vira PEDIU_AJUDA
-curl -X POST http://localhost:8082/checkin-service/api/v1/checkins \
-  -H "Content-Type: application/json" \
-  -d '{"idosoId":3,"tipo":"PRECISO_AJUDA","observacao":"Caí no banheiro"}'
-
-# 5) Idoso inexistente -> 404
-curl -i -X POST http://localhost:8082/checkin-service/api/v1/checkins \
-  -H "Content-Type: application/json" \
-  -d '{"idosoId":999,"tipo":"ESTOU_BEM"}'
+```
+http://localhost:8082/idoso-service/api/v1/idosos
 ```
 
-**Testando Circuit Breaker + Fallback:** pare o `idoso-service` e repita o passo 2. O checkin-service responde **503** com mensagem amigável (fallback) em vez de erro genérico, e nada é gravado.
+Esperado: 200 com os 3 idosos da carga inicial
+
+### 2. Buscar idoso por id
+
+**GET**
+
+```
+http://localhost:8082/idoso-service/api/v1/idosos/1
+```
+
+Esperado: 200, `statusDia` = `AGUARDANDO`
+
+### 3. Criar idoso
+
+**POST**
+
+```
+http://localhost:8082/idoso-service/api/v1/idosos
+```
+
+Body (JSON):
+
+```json
+{
+  "nome": "Antonio Ferreira",
+  "dataNascimento": "1948-05-20",
+  "telefone": "(11) 95555-4444",
+  "horarioAviso": "09:30:00",
+  "tempoEsperaMinutos": 60
+}
+```
+
+Esperado: 201 com o header `Location` e `statusDia` = `AGUARDANDO` (anote o `id`, será o 4)
+
+### 4. Atualizar idoso
+
+**PUT**
+
+```
+http://localhost:8082/idoso-service/api/v1/idosos/4
+```
+
+Body (JSON):
+
+```json
+{
+  "nome": "Antonio Ferreira Lima",
+  "dataNascimento": "1948-05-20",
+  "telefone": "(11) 95555-4444",
+  "horarioAviso": "10:00:00",
+  "tempoEsperaMinutos": 90
+}
+```
+
+Esperado: 200 com os dados atualizados
+
+### 5. Excluir idoso
+
+**DELETE**
+
+```
+http://localhost:8082/idoso-service/api/v1/idosos/4
+```
+
+Esperado: 204 sem corpo
+
+### 6. Idoso inexistente
+
+**GET**
+
+```
+http://localhost:8082/idoso-service/api/v1/idosos/999
+```
+
+Esperado: 404
+
+### 7. Validação (corpo inválido)
+
+**POST**
+
+```
+http://localhost:8082/idoso-service/api/v1/idosos
+```
+
+Body (JSON):
+
+```json
+{
+  "nome": "",
+  "dataNascimento": "2999-01-01",
+  "telefone": "",
+  "horarioAviso": "09:00:00",
+  "tempoEsperaMinutos": 0
+}
+```
+
+Esperado: 400 com a lista de erros por campo
+
+## Check-ins e comunicação síncrona (checkin-service)
+
+### 8. Listar check-ins
+
+**GET**
+
+```
+http://localhost:8082/checkin-service/api/v1/checkins
+```
+
+Esperado: 200 com os 3 check-ins da carga inicial
+
+### 9. Buscar check-in por id
+
+**GET**
+
+```
+http://localhost:8082/checkin-service/api/v1/checkins/1
+```
+
+Esperado: 200
+
+### 10. Check-in "Estou bem" (altera o status via Feign)
+
+**POST**
+
+```
+http://localhost:8082/checkin-service/api/v1/checkins
+```
+
+Body (JSON):
+
+```json
+{
+  "idosoId": 1,
+  "tipo": "ESTOU_BEM",
+  "observacao": "Tudo certo"
+}
+```
+
+Esperado: 201 com o header `Location`
+
+### 11. Conferir que o status do idoso 1 mudou
+
+**GET**
+
+```
+http://localhost:8082/idoso-service/api/v1/idosos/1
+```
+
+Esperado: 200, `statusDia` = `BEM`
+
+### 12. Check-in "Preciso de ajuda" (altera o status via Feign)
+
+**POST**
+
+```
+http://localhost:8082/checkin-service/api/v1/checkins
+```
+
+Body (JSON):
+
+```json
+{
+  "idosoId": 3,
+  "tipo": "PRECISO_AJUDA",
+  "observacao": "Caí no banheiro"
+}
+```
+
+Esperado: 201 com o header `Location`
+
+### 13. Conferir que o status do idoso 3 mudou
+
+**GET**
+
+```
+http://localhost:8082/idoso-service/api/v1/idosos/3
+```
+
+Esperado: 200, `statusDia` = `PEDIU_AJUDA`
+
+### 14. Check-in de idoso inexistente
+
+**POST**
+
+```
+http://localhost:8082/checkin-service/api/v1/checkins
+```
+
+Body (JSON):
+
+```json
+{
+  "idosoId": 999,
+  "tipo": "ESTOU_BEM"
+}
+```
+
+Esperado: 404, nada é gravado
+
+### 15. Atualizar check-in
+
+**PUT**
+
+```
+http://localhost:8082/checkin-service/api/v1/checkins/1
+```
+
+Body (JSON):
+
+```json
+{
+  "observacao": "Conferido pela família",
+  "resolvido": true
+}
+```
+
+Esperado: 200
+
+### 16. Excluir check-in
+
+**DELETE**
+
+```
+http://localhost:8082/checkin-service/api/v1/checkins/1
+```
+
+Esperado: 204 sem corpo
+
+## Circuit Breaker + Fallback
+
+Pare o `idoso-service` (Ctrl+C no terminal dele) e repita a requisição **10**. O checkin-service responde **503** com mensagem amigável (fallback) e nada é gravado. Ao subir o idoso-service novamente (e aguardar o registro no Eureka), a requisição volta a funcionar.
 
 ## Dados iniciais (Flyway)
 
